@@ -1,125 +1,97 @@
-<script setup>
-import { ref, reactive } from "vue";
-import { invoke } from "@tauri-apps/api/core";
-import {RouterView, useRouter} from 'vue-router'
-import {
-  Headset,
-  Tools
-} from '@element-plus/icons-vue'
-import { ElMessage, ElMessageBox, ElLoading } from 'element-plus';
-import {getCurrentWindow} from '@tauri-apps/api/window'
-import {connect} from './utils/sqlite';
-import { useVoicesStore } from "./store/voices";
-import { show_error } from "./utils/function";
-import mitter from "./utils/mitt";
-import { useOptionStore } from "./store/option";
-
-const loading = ElLoading.service({
-  lock: true,
-  text: '加载数据中……',
-  background: 'rgba(0, 0, 0, 0.7)',
-})
-
-const timer = setInterval(() => {
-  if(readObject.voices && readObject.option && readObject.exePath){
-    clearInterval(timer);
-    loading.close()
-  }
-}, 100);
-
-const readObject = reactive({
-  voices: false,
-  option: false,
-  exePath: false
-})
-
-// 初始化数据库
-const voicesStore = useVoicesStore();
-const optionStore = useOptionStore();
-
-connect().then(()=>{
-  // 获取配音员
-  voicesStore.getVoicesList().then(()=>{
-    readObject.voices = true;
-  }).catch((error)=>{
-    show_error(error);
-  });
-
-  // 获取app路径和设置对象
-  optionStore.getExePath().then(()=>{
-    readObject.exePath = true;
-    return optionStore.getOption();
-  }).then(()=>{
-    readObject.option = true;
-  }).catch((error)=> {
-    show_error(error);
-    readObject.exePath = true;
-    readObject.option = true;
-  })
-
-}).catch((error)=>{
-  ElMessageBox.alert(error, '初始化失败', {
-    confirmButtonText: 'OK',
-    callback: (action) => {
-      const window = getCurrentWindow();
-      window.close().catch(error=>{
-        ElMessage.error(error);
-      })
-    },
-  });
-})
-
-const router = useRouter();
-
-const greetMsg = ref("");
-const name = ref("");
-
-async function greet() {
-  // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-  greetMsg.value = await invoke("greet", { name: name.value });
-}
-
-const handleOpen = (key, keyPath) => {
-  router.push({path: "/"  + key})
-}
-
-</script>
-
 <template>
-  <div class="appBox">
-    <el-menu
-      default-active="tts"
-      class="menu"
-      @select="handleOpen"
-    >
-      <el-menu-item index="tts">
-        <el-icon><Headset /></el-icon>
-        <template #title>配音</template>
-      </el-menu-item>
-      <el-menu-item index="set">
-        <el-icon><Tools /></el-icon>
-        <template #title>设置</template>
-      </el-menu-item>
-    </el-menu>
-    <RouterView v-if="readObject.voices && readObject.option && readObject.exePath" class="router-view"></RouterView>
+  <WinToolTipService />
+  <div class="app-root">
+    <WinTitleBar
+      class="app-titlebar"
+      Title="tts-tauri"
+      PreferredHeightOption="Tall"
+      :IsBackButtonVisible="false"
+      :IsPaneToggleButtonVisible="true"
+      @PaneToggleRequested="onPaneToggle">
+      <template #RightHeader>
+        <WindowControls />
+      </template>
+    </WinTitleBar>
+    <div class="app-content">
+      <WinNavigationView
+        :MenuItems="navMenuItems"
+        :SelectedItem="selectedNavItem"
+        :IsPaneOpen="paneOpen"
+        PaneDisplayMode="Left"
+        IsBackButtonVisible="Collapsed"
+        :IsPaneToggleButtonVisible="false"
+        :IsSettingsVisible="false"
+        @update:IsPaneOpen="paneOpen = $event"
+        @ItemInvoked="onItemInvoked">
+        <RouterView v-if="ready" />
+      </WinNavigationView>
+    </div>
   </div>
 </template>
 
+<script setup>
+import { ref, reactive, computed, onMounted } from "vue";
+import { RouterView, useRouter, useRoute } from "vue-router";
+import { connect } from "./utils/sqlite";
+import { useVoicesStore } from "./store/voices";
+import { show_error } from "./utils/function";
+import { useOptionStore } from "./store/option";
+
+import WinTitleBar from "@winui/components/TitleBar.vue";
+import WinNavigationView from "@winui/components/NavigationView.vue";
+import WinToolTipService from "@winui/components/ToolTipService.vue";
+import WindowControls from "./components/WindowControls.vue";
+
+const router = useRouter();
+const route = useRoute();
+const voicesStore = useVoicesStore();
+const optionStore = useOptionStore();
+
+const ready = ref(false);
+const paneOpen = ref(true);
+
+const navMenuItems = computed(() => [
+  { Tag: "tts", Icon: "󰋋", Content: "配音" },
+  { Tag: "set", Icon: "", Content: "设置" },
+]);
+
+const selectedNavItem = computed(() => {
+  const tag = route.path.replace("/", "") || "tts";
+  return navMenuItems.value.find((i) => i.Tag === tag) || navMenuItems.value[0];
+});
+
+function onPaneToggle() { paneOpen.value = !paneOpen.value; }
+function onItemInvoked(e) {
+  const tag = e?.InvokedItemContainer?.Tag;
+  if (!tag) return;
+  router.push("/" + tag);
+}
+
+const readObject = reactive({ voices: false, option: false, exePath: false });
+
+onMounted(() => {
+  connect()
+    .then(() => {
+      voicesStore.getVoicesList().then(()=>{readObject.voices=true;}).catch(err=>{show_error(err);readObject.voices=true;});
+      optionStore.getExePath().then(()=>{readObject.exePath=true; return optionStore.getOption();}).then(()=>{readObject.option=true;}).catch(err=>{show_error(err);readObject.exePath=true;readObject.option=true;});
+    })
+    .catch(console.error);
+
+  const timer = setInterval(()=>{
+    if(readObject.voices && readObject.option && readObject.exePath){ clearInterval(timer); ready.value = true; }
+  }, 50);
+});
+</script>
+
+<style>
+@import "@winui/styles/theme.css";
+@import "@winui/styles/icons.css";
+@import "@winui/styles/animations.css";
+</style>
+
 <style scoped>
-.router-view{
-    height: 100%;
-    box-sizing: border-box;
-    padding: 20px;
-    flex-grow: 1;
-  }
-
-  .appBox{
-    display: flex;
-    height: 100%;
-  }
-
-  .menu{
-    width: 200px;
-  }
-
+.app-root { width: 100vw; height: 100vh; overflow: hidden; }
+.app-titlebar { position: fixed; top: 0; left: 0; right: 0; z-index: 100; }
+.app-content { width: 100%; height: 100vh; padding-top: 48px; box-sizing: border-box; display: flex; }
+.app-content :deep(.win-nav-shell) { width: 100%; height: 100%; }
 </style>
