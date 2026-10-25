@@ -1,125 +1,192 @@
-<script setup>
-import { ref, reactive } from "vue";
-import { invoke } from "@tauri-apps/api/core";
-import {RouterView, useRouter} from 'vue-router'
-import {
-  Headset,
-  Tools
-} from '@element-plus/icons-vue'
-import { ElMessage, ElMessageBox, ElLoading } from 'element-plus';
-import {getCurrentWindow} from '@tauri-apps/api/window'
-import {connect} from './utils/sqlite';
-import { useVoicesStore } from "./store/voices";
-import { show_error } from "./utils/function";
-import mitter from "./utils/mitt";
-import { useOptionStore } from "./store/option";
-
-const loading = ElLoading.service({
-  lock: true,
-  text: '加载数据中……',
-  background: 'rgba(0, 0, 0, 0.7)',
-})
-
-const timer = setInterval(() => {
-  if(readObject.voices && readObject.option && readObject.exePath){
-    clearInterval(timer);
-    loading.close()
-  }
-}, 100);
-
-const readObject = reactive({
-  voices: false,
-  option: false,
-  exePath: false
-})
-
-// 初始化数据库
-const voicesStore = useVoicesStore();
-const optionStore = useOptionStore();
-
-connect().then(()=>{
-  // 获取配音员
-  voicesStore.getVoicesList().then(()=>{
-    readObject.voices = true;
-  }).catch((error)=>{
-    show_error(error);
-  });
-
-  // 获取app路径和设置对象
-  optionStore.getExePath().then(()=>{
-    readObject.exePath = true;
-    return optionStore.getOption();
-  }).then(()=>{
-    readObject.option = true;
-  }).catch((error)=> {
-    show_error(error);
-    readObject.exePath = true;
-    readObject.option = true;
-  })
-
-}).catch((error)=>{
-  ElMessageBox.alert(error, '初始化失败', {
-    confirmButtonText: 'OK',
-    callback: (action) => {
-      const window = getCurrentWindow();
-      window.close().catch(error=>{
-        ElMessage.error(error);
-      })
-    },
-  });
-})
-
-const router = useRouter();
-
-const greetMsg = ref("");
-const name = ref("");
-
-async function greet() {
-  // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-  greetMsg.value = await invoke("greet", { name: name.value });
-}
-
-const handleOpen = (key, keyPath) => {
-  router.push({path: "/"  + key})
-}
-
-</script>
-
 <template>
-  <div class="appBox">
-    <el-menu
-      default-active="tts"
-      class="menu"
-      @select="handleOpen"
-    >
-      <el-menu-item index="tts">
-        <el-icon><Headset /></el-icon>
-        <template #title>配音</template>
-      </el-menu-item>
-      <el-menu-item index="set">
-        <el-icon><Tools /></el-icon>
-        <template #title>设置</template>
-      </el-menu-item>
-    </el-menu>
-    <RouterView v-if="readObject.voices && readObject.option && readObject.exePath" class="router-view"></RouterView>
+  <ToolTipService />
+  <div class="app-root">
+    <TitleBar
+      class="app-titlebar"
+      Title="tts-tauri"
+      PreferredHeightOption="Tall"
+      IsCaptionButtonsVisible="True"
+      AutoRefreshDragRegions="True"
+      :IsBackButtonVisible="false"
+      :IsPaneToggleButtonVisible="true"
+      :IsPaneOpen="paneOpen"
+      @PaneToggleRequested="togglePane"
+      @MinimizeRequested="minimizeWindow"
+      @MaximizeRequested="toggleMaximizeWindow"
+      @CloseRequested="closeWindow"
+      @pointerdown="onTitleBarPointerDown"
+      @dblclick="onTitleBarDoubleClick" />
+
+    <div class="app-content">
+      <NavigationView
+        class="app-nav"
+        PaneDisplayMode="Left"
+        :MenuItemsSource="navMenuItems"
+        :SelectedItem="selectedNavItem"
+        :IsPaneOpen="paneOpen"
+        :IsSettingsVisible="false"
+        IsBackButtonVisible="Collapsed"
+        :IsPaneToggleButtonVisible="false"
+        :AlwaysShowHeader="false"
+        :IsTitleBarAutoPaddingEnabled="false"
+        @update:IsPaneOpen="paneOpen = $event"
+        @ItemInvoked="onItemInvoked">
+        <div v-if="ready" class="app-page-host">
+          <RouterView />
+        </div>
+        <div v-else class="app-loading">
+          <ProgressRing :IsActive="true" :Width="48" :Height="48" />
+          <TextBlock Text="正在加载数据……" Foreground="var(--TextFillColorSecondaryBrush, #5f5f5f)" />
+        </div>
+      </NavigationView>
+    </div>
+
+    <div class="app-notifications">
+      <InfoBar
+        v-for="item in notifications"
+        :key="item.id"
+        :IsOpen="true"
+        :Severity="item.severity"
+        :Title="item.title"
+        :Message="item.message"
+        @CloseButtonClick="dismiss(item.id)" />
+    </div>
   </div>
 </template>
 
-<style scoped>
-.router-view{
-    height: 100%;
-    box-sizing: border-box;
-    padding: 20px;
-    flex-grow: 1;
+<script setup>
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { RouterView, useRoute, useRouter } from "vue-router";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { connect } from "./utils/sqlite";
+import { useVoicesStore } from "./store/voices";
+import { show_error } from "./utils/function";
+import { useOptionStore } from "./store/option";
+import { dismiss, notifications } from "./utils/notify";
+
+const router = useRouter();
+const route = useRoute();
+const voicesStore = useVoicesStore();
+const optionStore = useOptionStore();
+
+const ready = ref(false);
+const paneOpen = ref(true);
+
+// 使用固定数组，保证 SelectedItem 的引用稳定
+const navMenuItems = [
+  { Tag: "tts", Icon: "\uE720", Content: "配音" },
+  { Tag: "set", Icon: "\uE713", Content: "设置" },
+];
+
+const selectedNavItem = computed(() => {
+  const tag = route.path.replace("/", "") || "tts";
+  return navMenuItems.find((item) => item.Tag === tag) ?? navMenuItems[0];
+});
+
+function togglePane() {
+  paneOpen.value = !paneOpen.value;
+}
+
+function onItemInvoked(sender, args) {
+  const tag = args?.InvokedItemContainer?.Tag ?? args?.InvokedItem?.Tag;
+  if (!tag) {
+    return;
+  }
+  if (route.path !== "/" + tag) {
+    router.push("/" + tag);
+  }
+}
+
+/* ------------------------------ 窗口控制 ------------------------------ */
+
+const tauriWindow =
+  typeof window !== "undefined" && "__TAURI_INTERNALS__" in window
+    ? getCurrentWindow()
+    : null;
+
+function minimizeWindow() {
+  tauriWindow?.minimize().catch(console.error);
+}
+
+function toggleMaximizeWindow() {
+  tauriWindow?.toggleMaximize().catch(console.error);
+}
+
+function closeWindow() {
+  tauriWindow?.close().catch(console.error);
+}
+
+function isInteractiveTarget(target) {
+  if (!(target instanceof Element)) {
+    return false;
+  }
+  return Boolean(
+    target.closest(
+      "button, input, textarea, select, a, [role='button'], [role='textbox'], [contenteditable='true'], .win-titlebar-caption-host"
+    )
+  );
+}
+
+function onTitleBarPointerDown(event) {
+  if (!tauriWindow || event.button !== 0 || isInteractiveTarget(event.target)) {
+    return;
+  }
+  tauriWindow.startDragging().catch(() => {});
+}
+
+function onTitleBarDoubleClick(event) {
+  if (!tauriWindow || isInteractiveTarget(event.target)) {
+    return;
+  }
+  toggleMaximizeWindow();
+}
+
+/* ------------------------------ 主题 ------------------------------ */
+
+const darkThemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
+
+function applyTheme() {
+  const root = document.documentElement;
+  root.classList.remove("theme-light", "theme-dark");
+  root.classList.add(darkThemeQuery.matches ? "theme-dark" : "theme-light");
+}
+
+/* ------------------------------ 初始化 ------------------------------ */
+
+onMounted(async () => {
+  applyTheme();
+  darkThemeQuery.addEventListener("change", applyTheme);
+
+  try {
+    await connect();
+  } catch (error) {
+    show_error(error);
+    ready.value = true;
+    return;
   }
 
-  .appBox{
-    display: flex;
-    height: 100%;
-  }
+  const tasks = [];
 
-  .menu{
-    width: 200px;
-  }
+  tasks.push(
+    voicesStore.getVoicesList().catch((error) => {
+      show_error(error);
+    })
+  );
 
-</style>
+  tasks.push(
+    optionStore
+      .getExePath()
+      .then(() => optionStore.getOption())
+      .catch((error) => {
+        show_error(error);
+      })
+  );
+
+  await Promise.allSettled(tasks);
+  ready.value = true;
+});
+
+onBeforeUnmount(() => {
+  darkThemeQuery.removeEventListener("change", applyTheme);
+});
+</script>

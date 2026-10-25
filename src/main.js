@@ -1,13 +1,15 @@
 import { createApp } from "vue";
+import { createPinia } from "pinia";
+import WinUIOnWeb from "winuionweb";
+import "winuionweb/style.css";
 import App from "./App.vue";
-import ElementPlus from 'element-plus'
-import 'element-plus/dist/index.css'
-import { createPinia } from 'pinia'
-import router from './router'
+import router from "./router";
+import "./styles/app.css";
 
-const pinia = createPinia();
 const app = createApp(App);
+
+app.use(createPinia());
 app.use(router);
-app.use(ElementPlus);
-app.use(pinia);
-app.mount('#app');
+app.use(WinUIOnWeb, { locale: "zh-CN" });
+
+app.mount("#app");
